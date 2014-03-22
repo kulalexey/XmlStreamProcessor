@@ -1,0 +1,7 @@
+Debug
+Release
+*misc/
+_ReSharper.*
+*.suo
+*.user
+*.csproj.ReSharper

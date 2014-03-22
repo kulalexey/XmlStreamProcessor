@@ -40,7 +40,7 @@ namespace XmlStreamProcessor.Test.UnitTest
 				</sample2>
 			";
 
-			var parser = ParserTool.CreateParser(q => q.Type("sample2",
+			Func<XmlReader, Sample> parser = ParserTool.CreateParser(q => q.Type("sample2",
 				a => new Sample()
 				{
 					Tag = a.Tag(),
