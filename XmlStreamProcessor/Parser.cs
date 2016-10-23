@@ -75,7 +75,11 @@ namespace XmlStreamProcessor
 			var str = reader.ReadString();
 			if (string.IsNullOrEmpty(str))
 				return null;
-			return Convert.ToDecimal(str.Replace(".", numberFormatInfo.NumberGroupSeparator));
+			decimal result;
+			if (decimal.TryParse(str.Replace(".", numberFormatInfo.NumberGroupSeparator), out result))
+				return result;
+			else
+				return null;
 		}
 	}
 
@@ -124,22 +128,34 @@ namespace XmlStreamProcessor
 
 			if (reader.NodeType == XmlNodeType.Element)
 			{
-				nodeHandle.HandleTagName(reader.LocalName);
-
-				if (reader.HasAttributes && SchemaBuilder.AttributeSchema.Count > 0)
+				try
 				{
-					while (reader.MoveToNextAttribute())
+					nodeHandle.HandleTagName(reader.LocalName);
+
+					if (reader.HasAttributes && SchemaBuilder.AttributeSchema.Count > 0)
 					{
-						AttributeSchema schema;
-						SchemaBuilder.AttributeSchema.TryGetValue(reader.LocalName, out schema);
-						if (schema != null)
-							nodeHandle.HandleAttribute(schema, reader.Value);
+						while (reader.MoveToNextAttribute())
+						{
+							AttributeSchema schema;
+							SchemaBuilder.AttributeSchema.TryGetValue(reader.LocalName, out schema);
+							if (schema != null)
+								nodeHandle.HandleAttribute(schema, reader.Value);
+						}
 					}
+				}
+				catch (Exception ex)
+				{
+					throw new ApplicationException(string.Format("Exception while parsing node '{0}': {1}", reader.Name, ex.Message), ex);
 				}
 			}
 
-			while (reader.Read())
+			if (!reader.Read())
+				return nodeHandle.GetResult();
+
+			while (true)
 			{
+				bool skipNode = false;
+
 				if (reader.Depth <= rootDepth)
 					break;
 
@@ -153,8 +169,21 @@ namespace XmlStreamProcessor
 						SchemaBuilder.ElementSchema.TryGetValue(xmlNode, out elementSchema);
 						if (elementSchema == null)
 						{
-							xmlNode = "*";
-							SchemaBuilder.ElementSchema.TryGetValue(xmlNode, out elementSchema);
+							//xmlNode = "*";
+							//SchemaBuilder.ElementSchema.TryGetValue(xmlNode, out elementSchema);
+
+							var masks = SchemaBuilder.ElementSchema.Where(pair => pair.Key.Contains("*")).ToList();
+							if (masks.Count > 0)
+							{
+								foreach (var e in masks)
+								{
+									var idx = e.Key.IndexOf("*");
+									var start = e.Key.Substring(0, idx);
+									var end = e.Key.Substring(idx + 1, e.Key.Length - idx - 1);
+									if (xmlNode.StartsWith(start) && xmlNode.EndsWith(end))
+										elementSchema = e.Value;
+								}
+							}
 						}
 
 						if (elementSchema != null)
@@ -162,8 +191,17 @@ namespace XmlStreamProcessor
 							var value = elementSchema.Parser.Parse(reader);
 							nodeHandle.HandleNode(xmlNode, elementSchema, value);
 						}
+						else
+							skipNode = true;
 					}
+					else if (reader.Depth > rootDepth + 1)
+						skipNode = true;
 				}
+
+				if (skipNode)
+					reader.Skip();
+				else if (!reader.Read())
+					break;
 			}
 
 			return nodeHandle.GetResult();
@@ -348,7 +386,7 @@ namespace XmlStreamProcessor
 						else
 							return x;
 					}).ToList();
-
+					
 				var visited = (LambdaExpression)base.VisitLambda(node);
 
 				return Expression.Lambda(typeof(Func<ParserData, object>), Expression.Convert(visited.Body, typeof(object)), newParameters);
@@ -361,27 +399,27 @@ namespace XmlStreamProcessor
 		{
 			if (node.Object != null && node.Object.Type == typeof(INode))
 			{
-				switch (node.Method.Name)
-				{
-					case "Tag":
-						return TagExpression();
+				if (node.Method.Name == "Tag")
+                {
+					return TagExpression();
 				}
 
 				var xmlNode = ((string)((ConstantExpression)node.Arguments[0]).Value);
-				var argN = ArgLength++;
+                int argN = ArgLength - 1;
 
-				switch (node.Method.Name)
-				{
-					case "Attribute":
-						if (!AttributeSchema.ContainsKey(xmlNode))
-						{
-							AttributeSchema[xmlNode] = new AttributeSchema() { ParseToArgN = argN };
-						}
-						return GetExpression(typeof(string), argN);
+				if (node.Method.Name == "Attribute")
+                {
+					if (!AttributeSchema.ContainsKey(xmlNode))
+					{
+                        argN = ArgLength++;
+						AttributeSchema[xmlNode] = new AttributeSchema() { ParseToArgN = argN };
+					}
+					return GetExpression(typeof(string), argN);
 				}
 
 				if (!ElementSchema.ContainsKey(xmlNode))
 				{
+                    argN = ArgLength++;
 					ElementSchema[xmlNode] = new ElementSchema() { ParseToArgN = argN };
 				}
 
